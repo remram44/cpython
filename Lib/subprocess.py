@@ -43,6 +43,7 @@ getstatusoutput(...): Runs a command in the shell, waits for it to complete,
 import builtins
 import errno
 import io
+import itertools
 import locale
 import os
 import time
@@ -796,6 +797,8 @@ class Popen:
 
       pass_fds (POSIX only)
 
+      map_fds (POSIX only)
+
       encoding and errors: Text mode encoding and error handling to use for
           file objects stdin, stdout and stderr.
 
@@ -812,7 +815,7 @@ class Popen:
                  restore_signals=True, start_new_session=False,
                  pass_fds=(), *, user=None, group=None, extra_groups=None,
                  encoding=None, errors=None, text=None, umask=-1, pipesize=-1,
-                 process_group=None):
+                 process_group=None, map_fds=None):
         """Create new Popen instance."""
         if not _can_fork_exec:
             raise OSError(
@@ -845,8 +848,15 @@ class Popen:
                                  "platforms")
         else:
             # POSIX
-            if pass_fds and not close_fds:
-                warnings.warn("pass_fds overriding close_fds.", RuntimeWarning)
+            if map_fds:
+                map_fds = dict(map_fds)
+            else:
+                map_fds = {}
+            if pass_fds:
+                for fd in pass_fds:
+                    map_fds[fd] = fd
+            if map_fds and not close_fds:
+                warnings.warn("pass_fds and map_fds override close_fds.", RuntimeWarning)
                 close_fds = True
             if startupinfo is not None:
                 raise ValueError("startupinfo is only supported on Windows "
@@ -1024,7 +1034,7 @@ class Popen:
                             encoding=encoding, errors=errors)
 
             self._execute_child(args, executable, preexec_fn, close_fds,
-                                pass_fds, cwd, env,
+                                map_fds, cwd, env,
                                 startupinfo, creationflags, shell,
                                 p2cread, p2cwrite,
                                 c2pread, c2pwrite,
@@ -1434,7 +1444,7 @@ class Popen:
 
 
         def _execute_child(self, args, executable, preexec_fn, close_fds,
-                           pass_fds, cwd, env,
+                           map_fds, cwd, env,
                            startupinfo, creationflags, shell,
                            p2cread, p2cwrite,
                            c2pread, c2pwrite,
@@ -1445,7 +1455,7 @@ class Popen:
                            unused_start_new_session, unused_process_group):
             """Execute program (MS Windows version)"""
 
-            assert not pass_fds, "pass_fds not supported on Windows."
+            assert not map_fds, "map_fds not supported on Windows."
 
             if isinstance(args, str):
                 pass
@@ -1787,7 +1797,7 @@ class Popen:
                                  errread, errwrite)
 
         def _execute_child(self, args, executable, preexec_fn, close_fds,
-                           pass_fds, cwd, env,
+                           map_fds, cwd, env,
                            startupinfo, creationflags, shell,
                            p2cread, p2cwrite,
                            c2pread, c2pwrite,
@@ -1824,7 +1834,7 @@ class Popen:
                     and os.path.dirname(executable)
                     and preexec_fn is None
                     and not close_fds
-                    and not pass_fds
+                    and not map_fds
                     and cwd is None
                     and (p2cread == -1 or p2cread > 2)
                     and (c2pwrite == -1 or c2pwrite > 2)
@@ -1878,11 +1888,13 @@ class Popen:
                         executable_list = tuple(
                             os.path.join(os.fsencode(dir), executable)
                             for dir in os.get_exec_path(env))
-                    fds_to_keep = set(pass_fds)
-                    fds_to_keep.add(errpipe_write)
+                    sorted_map_fds = tuple(sorted(itertools.chain(
+                        ((int(k), int(v)) for k, v in map_fds.items()),
+                        ((errpipe_write, errpipe_write),),
+                    )))
                     self.pid = _fork_exec(
                             args, executable_list,
-                            close_fds, tuple(sorted(map(int, fds_to_keep))),
+                            close_fds, sorted_map_fds,
                             cwd, env_list,
                             p2cread, p2cwrite, c2pread, c2pwrite,
                             errread, errwrite,
