@@ -142,19 +142,32 @@ static int
 _sanity_check_python_fd_sequence(PyObject *fd_sequence)
 {
     Py_ssize_t seq_idx;
+    Py_ssize_t pair_idx;
     long prev_fd = -1;
     for (seq_idx = 0; seq_idx < PyTuple_GET_SIZE(fd_sequence); ++seq_idx) {
-        PyObject* py_fd = PyTuple_GET_ITEM(fd_sequence, seq_idx);
-        long iter_fd;
-        if (!PyLong_Check(py_fd)) {
+        PyObject* py_fd_pair = PyTuple_GET_ITEM(fd_sequence, seq_idx);
+        if (!PyTuple_Check(py_fd_pair)) {
             return 1;
         }
-        iter_fd = PyLong_AsLong(py_fd);
-        if (iter_fd < 0 || iter_fd <= prev_fd || iter_fd > INT_MAX) {
-            /* Negative, overflow, unsorted, too big for a fd. */
-            return 1;
+        for (pair_idx = 0; pair_idx < 2; ++ pair_idx) {
+            PyObject* py_fd = PyTuple_GET_ITEM(py_fd_pair, pair_idx);
+            long iter_fd;
+            if (!PyLong_Check(py_fd)) {
+                return 1;
+            }
+            iter_fd = PyLong_AsLong(py_fd);
+            if (iter_fd < 0 || iter_fd > INT_MAX) {
+                /* Negative, overflow, too big for a fd. */
+                return 1;
+            }
+            if (pair_idx == 0) {
+                if (iter_fd <= prev_fd) {
+                    /* Unsorted. */
+                    return 1;
+                }
+                prev_fd = iter_fd;
+            }
         }
-        prev_fd = iter_fd;
     }
     return 0;
 }
@@ -266,8 +279,8 @@ _Py_FreeCharPArray(char *const array[])
 
 
 /*
- * Do all the Python C API calls in the parent process to turn the pass_fds
- * "py_fds_to_keep" tuple into a C array.  The caller owns allocation and
+ * Do all the Python C API calls in the parent process to turn the map_fds
+ * "py_map_fds" tuple into a C array.  The caller owns allocation and
  * freeing of the array.
  *
  * On error an unknown number of array elements may have been filled in.
@@ -276,23 +289,31 @@ _Py_FreeCharPArray(char *const array[])
  * Returns: -1 on error, 0 on success.
  */
 static int
-convert_fds_to_keep_to_c(PyObject *py_fds_to_keep, int *c_fds_to_keep)
+convert_map_fds_to_c(PyObject *py_map_fds, int *c_fds_to_keep, int *c_map_fds_from)
 {
     Py_ssize_t i, len;
 
-    len = PyTuple_GET_SIZE(py_fds_to_keep);
+    len = PyTuple_GET_SIZE(py_map_fds);
     for (i = 0; i < len; ++i) {
-        PyObject* fdobj = PyTuple_GET_ITEM(py_fds_to_keep, i);
-        long fd = PyLong_AsLong(fdobj);
-        if (fd == -1 && PyErr_Occurred()) {
+        PyObject* fdpairobj = PyTuple_GET_ITEM(py_map_fds, i);
+        PyObject* toobj = PyTuple_GET_ITEM(fdpairobj, 0);
+        PyObject* fromobj = PyTuple_GET_ITEM(fdpairobj, 1);
+        long to_fd, from_fd;
+        to_fd = PyLong_AsLong(toobj);
+        if (to_fd == -1 && PyErr_Occurred()) {
             return -1;
         }
-        if (fd < 0 || fd > INT_MAX) {
+        from_fd = PyLong_AsLong(fromobj);
+        if (from_fd == -1 && PyErr_Occurred()) {
+            return -1;
+        }
+        if (to_fd < 0 || to_fd > INT_MAX || from_fd < 0 || from_fd > INT_MAX) {
             PyErr_SetString(PyExc_ValueError,
-                            "fd out of range in fds_to_keep.");
+                            "fd out of range in map_fds.");
             return -1;
         }
-        c_fds_to_keep[i] = (int)fd;
+        c_fds_to_keep[i] = (int)to_fd;
+        c_map_fds_from[i] = (int)from_fd;
     }
     return 0;
 }
@@ -668,7 +689,7 @@ child_exec(char *const exec_array[],
            Py_ssize_t extra_group_size, const gid_t *extra_groups,
            uid_t uid, int child_umask,
            const void *child_sigmask,
-           int *fds_to_keep, Py_ssize_t fds_to_keep_len,
+           int *fds_to_keep, int *fds_map_from, Py_ssize_t fds_to_keep_len,
            PyObject *preexec_fn,
            PyObject *preexec_fn_args_tuple)
 {
@@ -875,7 +896,7 @@ do_fork_exec(char *const exec_array[],
              Py_ssize_t extra_group_size, const gid_t *extra_groups,
              uid_t uid, int child_umask,
              const void *child_sigmask,
-             int *fds_to_keep, Py_ssize_t fds_to_keep_len,
+             int *fds_to_keep, int *fds_map_from, Py_ssize_t fds_to_keep_len,
              PyObject *preexec_fn,
              PyObject *preexec_fn_args_tuple)
 {
@@ -943,7 +964,7 @@ do_fork_exec(char *const exec_array[],
                close_fds, restore_signals, call_setsid, pgid_to_set,
                gid, extra_group_size, extra_groups,
                uid, child_umask, child_sigmask,
-               fds_to_keep, fds_to_keep_len,
+               fds_to_keep, fds_map_from, fds_to_keep_len,
                preexec_fn, preexec_fn_args_tuple);
     _exit(255);
     return 0;  /* Dead code to avoid a potential compiler warning. */
@@ -954,7 +975,7 @@ _posixsubprocess.fork_exec as subprocess_fork_exec
     args as process_args: object
     executable_list: object
     close_fds: bool
-    pass_fds as py_fds_to_keep: object(subclass_of='&PyTuple_Type')
+    map_fds as py_map_fds: object(subclass_of='&PyTuple_Type')
     cwd as cwd_obj: object
     env as env_list: object
     p2cread: int
@@ -1002,7 +1023,7 @@ Raises: Only on an error in the parent process.
 static PyObject *
 subprocess_fork_exec_impl(PyObject *module, PyObject *process_args,
                           PyObject *executable_list, int close_fds,
-                          PyObject *py_fds_to_keep, PyObject *cwd_obj,
+                          PyObject *py_map_fds, PyObject *cwd_obj,
                           PyObject *env_list, int p2cread, int p2cwrite,
                           int c2pread, int c2pwrite, int errread,
                           int errwrite, int errpipe_read, int errpipe_write,
@@ -1025,7 +1046,8 @@ subprocess_fork_exec_impl(PyObject *module, PyObject *process_args,
     int need_after_fork = 0;
     int saved_errno = 0;
     int *c_fds_to_keep = NULL;
-    Py_ssize_t fds_to_keep_len = PyTuple_GET_SIZE(py_fds_to_keep);
+    int *c_fds_map_from = NULL;
+    Py_ssize_t fds_to_keep_len = PyTuple_GET_SIZE(py_map_fds);
 
     PyInterpreterState *interp = _PyInterpreterState_GET();
     if ((preexec_fn != Py_None) && interp->finalizing) {
@@ -1043,8 +1065,8 @@ subprocess_fork_exec_impl(PyObject *module, PyObject *process_args,
         PyErr_SetString(PyExc_ValueError, "errpipe_write must be >= 3");
         return NULL;
     }
-    if (_sanity_check_python_fd_sequence(py_fds_to_keep)) {
-        PyErr_SetString(PyExc_ValueError, "bad value(s) in fds_to_keep");
+    if (_sanity_check_python_fd_sequence(py_map_fds)) {
+        PyErr_SetString(PyExc_ValueError, "bad value(s) in map_fds");
         return NULL;
     }
 
@@ -1186,7 +1208,12 @@ subprocess_fork_exec_impl(PyObject *module, PyObject *process_args,
         PyErr_SetString(PyExc_MemoryError, "failed to malloc c_fds_to_keep");
         goto cleanup;
     }
-    if (convert_fds_to_keep_to_c(py_fds_to_keep, c_fds_to_keep) < 0) {
+    c_fds_map_from = PyMem_Malloc(fds_to_keep_len * sizeof(int));
+    if (c_fds_map_from == NULL) {
+        PyErr_SetString(PyExc_MemoryError, "failed to malloc c_fds_map_from");
+        goto cleanup;
+    }
+    if (convert_map_fds_to_c(py_map_fds, c_fds_to_keep, c_fds_map_from) < 0) {
         goto cleanup;
     }
 
@@ -1232,7 +1259,7 @@ subprocess_fork_exec_impl(PyObject *module, PyObject *process_args,
                        close_fds, restore_signals, call_setsid, pgid_to_set,
                        gid, extra_group_size, extra_groups,
                        uid, child_umask, old_sigmask,
-                       c_fds_to_keep, fds_to_keep_len,
+                       c_fds_to_keep, c_fds_map_from, fds_to_keep_len,
                        preexec_fn, preexec_fn_args_tuple);
 
     /* Parent (original) process */
@@ -1265,6 +1292,9 @@ subprocess_fork_exec_impl(PyObject *module, PyObject *process_args,
 cleanup:
     if (c_fds_to_keep != NULL) {
         PyMem_Free(c_fds_to_keep);
+    }
+    if (c_fds_map_from != NULL) {
+        PyMem_Free(c_fds_map_from);
     }
 
     if (saved_errno != 0) {
