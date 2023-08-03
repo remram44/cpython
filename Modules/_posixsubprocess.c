@@ -711,6 +711,8 @@ child_exec(char *const exec_array[],
         POSIX_CALL(close(errread));
     POSIX_CALL(close(errpipe_read));
 
+    /* TODO: Map fds */
+
     /* When duping fds, if there arises a situation where one of the fds is
        either 0, 1 or 2, it is possible that it is overwritten (#12607). */
     if (c2pwrite == 0) {
