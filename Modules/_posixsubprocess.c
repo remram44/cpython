@@ -697,7 +697,7 @@ child_exec(char *const exec_array[],
            PyObject *preexec_fn,
            PyObject *preexec_fn_args_tuple)
 {
-    int i, saved_errno, reached_preexec = 0;
+    int i, saved_errno, reached_preexec = 0, fd_map_max;
     PyObject *result;
     const char* err_msg = "";
     /* Buffer large enough to hold a hex integer.  We can't malloc. */
@@ -715,7 +715,19 @@ child_exec(char *const exec_array[],
         POSIX_CALL(close(errread));
     POSIX_CALL(close(errpipe_read));
 
-    /* TODO: Map fds */
+    if (fds_to_keep_len) {
+        /* dup fds above the maximum target number */
+        fd_map_max = fds_to_keep[fds_to_keep_len - 1];
+        for (i = 0; i < fds_to_keep_len; ++i) {
+            POSIX_CALL(dup2(fds_map_from[i], fd_map_max + 1 + i));
+            if (_Py_set_inheritable_async_safe(fds_map_from[i], 0, NULL) < 0)
+                goto error;
+        }
+        /* dup fds back to their final destinations */
+        for (i = 0; i < fds_to_keep_len; ++i) {
+            POSIX_CALL(dup2(fd_map_max + 1 + i, fds_to_keep[i]));
+        }
+    }
 
     /* When duping fds, if there arises a situation where one of the fds is
        either 0, 1 or 2, it is possible that it is overwritten (#12607). */
