@@ -147,22 +147,26 @@ _sanity_check_python_fd_sequence(PyObject *fd_sequence)
     for (seq_idx = 0; seq_idx < PyTuple_GET_SIZE(fd_sequence); ++seq_idx) {
         PyObject* py_fd_pair = PyTuple_GET_ITEM(fd_sequence, seq_idx);
         if (!PyTuple_Check(py_fd_pair)) {
+            PyErr_SetString(PyExc_ValueError, "element not a tuple in map_fds");
             return 1;
         }
         for (pair_idx = 0; pair_idx < 2; ++ pair_idx) {
             PyObject* py_fd = PyTuple_GET_ITEM(py_fd_pair, pair_idx);
             long iter_fd;
             if (!PyLong_Check(py_fd)) {
+                PyErr_SetString(PyExc_ValueError, "sub-element not a long in map_fds");
                 return 1;
             }
             iter_fd = PyLong_AsLong(py_fd);
             if (iter_fd < 0 || iter_fd > INT_MAX) {
                 /* Negative, overflow, too big for a fd. */
+                PyErr_SetString(PyExc_ValueError, "bad fd in map_fds");
                 return 1;
             }
             if (pair_idx == 0) {
                 if (iter_fd <= prev_fd) {
                     /* Unsorted. */
+                    PyErr_SetString(PyExc_ValueError, "unsorted map_fds");
                     return 1;
                 }
                 prev_fd = iter_fd;
@@ -1068,7 +1072,7 @@ subprocess_fork_exec_impl(PyObject *module, PyObject *process_args,
         return NULL;
     }
     if (_sanity_check_python_fd_sequence(py_map_fds)) {
-        PyErr_SetString(PyExc_ValueError, "bad value(s) in map_fds");
+        /*PyErr_SetString(PyExc_ValueError, "bad value(s) in map_fds");*/
         return NULL;
     }
 
