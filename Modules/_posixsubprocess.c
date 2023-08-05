@@ -701,15 +701,15 @@ child_exec(char *const exec_array[],
         if (errwrite > keep_fd_max) {
             keep_fd_max = errwrite;
         }
-        if (errpipe_write_orig > keep_fd_max) {
-            keep_fd_max = errpipe_write_orig;
+        if (2 > keep_fd_max) {
+            keep_fd_max = 2;
         }
         for (i = 0; i < fds_to_keep_len; ++i) {
             POSIX_CALL(dup2(fds_map_from[i], keep_fd_max + 1 + i));
-            if (fds_to_keep[i] == errpipe_write_orig) {
+            if (fds_map_from[i] == errpipe_write_orig) {
                 errpipe_write = keep_fd_max + 1 + i;
             }
-            if (_Py_set_inheritable_async_safe(fds_map_from[i], 0, NULL) < 0)
+            if (_Py_set_inheritable_async_safe(keep_fd_max + 1 + i, 0, NULL) < 0)
                 goto error;
         }
     }
@@ -758,7 +758,7 @@ child_exec(char *const exec_array[],
     if (fds_to_keep_len) {
         /* dup fds back to their final destinations */
         for (i = 0; i < fds_to_keep_len; ++i) {
-            if (fds_to_keep[i] == errpipe_write_orig) {
+            if (fds_map_from[i] == errpipe_write_orig) {
                 /* errpipe_write is part of fds_to_keep. It must be closed at
                    exec(), but kept open in the child process until exec() is
                    called. */
