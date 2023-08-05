@@ -323,29 +323,6 @@ convert_map_fds_to_c(PyObject *py_map_fds, int *c_fds_to_keep, int *c_map_fds_fr
 }
 
 
-/* This function must be async-signal-safe as it is called from child_exec()
- * after fork() or vfork().
- */
-static int
-make_inheritable(int *c_fds_to_keep, Py_ssize_t len, int errpipe_write)
-{
-    Py_ssize_t i;
-
-    for (i = 0; i < len; ++i) {
-        int fd = c_fds_to_keep[i];
-        if (fd == errpipe_write) {
-            /* errpipe_write is part of fds_to_keep. It must be closed at
-               exec(), but kept open in the child process until exec() is
-               called. */
-            continue;
-        }
-        if (_Py_set_inheritable_async_safe(fd, 1, NULL) < 0)
-            return -1;
-    }
-    return 0;
-}
-
-
 /* Get the maximum file descriptor that could be opened by this process.
  * This function is async signal safe for use between fork() and exec().
  */
@@ -703,9 +680,6 @@ child_exec(char *const exec_array[],
     /* Buffer large enough to hold a hex integer.  We can't malloc. */
     char hex_errno[sizeof(saved_errno)*2+1];
 
-    if (make_inheritable(fds_to_keep, fds_to_keep_len, errpipe_write) < 0)
-        goto error;
-
     /* Close parent's pipe ends. */
     if (p2cwrite != -1)
         POSIX_CALL(close(p2cwrite));
@@ -719,13 +693,25 @@ child_exec(char *const exec_array[],
         /* dup fds above the maximum target number */
         fd_map_max = fds_to_keep[fds_to_keep_len - 1];
         for (i = 0; i < fds_to_keep_len; ++i) {
-            POSIX_CALL(dup2(fds_map_from[i], fd_map_max + 1 + i));
+            if (fds_to_keep[i] == errpipe_write) {
+                /* errpipe_write is part of fds_to_keep. It must be closed at
+                   exec(), but kept open in the child process until exec() is
+                   called.
+                   move it above the target range where it won't be overwritten. */
+                dup2(errpipe_write, fd_map_max + 1);
+                errpipe_write = fd_map_max + 1;
+                continue;
+            }
+            POSIX_CALL(dup2(fds_map_from[i], fd_map_max + 2 + i));
             if (_Py_set_inheritable_async_safe(fds_map_from[i], 0, NULL) < 0)
                 goto error;
         }
         /* dup fds back to their final destinations */
         for (i = 0; i < fds_to_keep_len; ++i) {
-            POSIX_CALL(dup2(fd_map_max + 1 + i, fds_to_keep[i]));
+            if (fds_to_keep[i] == errpipe_write) {
+                continue;
+            }
+            POSIX_CALL(dup2(fd_map_max + 2 + i, fds_to_keep[i]));
         }
     }
 
