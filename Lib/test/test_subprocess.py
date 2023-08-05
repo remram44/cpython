@@ -2958,7 +2958,7 @@ class POSIXProcessTestCase(BaseTestCase):
                 self.assertFalse(subprocess.call(
                         ZERO_RETURN_CMD,
                         close_fds=False, pass_fds=(fd, )))
-            self.assertIn('overriding close_fds', str(context.warning))
+            self.assertIn('override close_fds', str(context.warning))
 
     def test_pass_fds_inheritable(self):
         script = support.findfile("fd_status.py", subdir="subprocessdata")
@@ -3214,7 +3214,7 @@ class POSIXProcessTestCase(BaseTestCase):
             ):
                 with self.assertRaises(
                         ValueError,
-                        msg='fds_to_keep={}'.format(fds_to_keep)) as c:
+                        msg='fds_to_keep={}'.format(fds_to_keep)) as c: # TODO: takes map_fds now
                     _posixsubprocess.fork_exec(
                         [b"false"], [b"false"],
                         True, fds_to_keep, None, [b"env"],
@@ -3223,7 +3223,7 @@ class POSIXProcessTestCase(BaseTestCase):
                         True, True, 0,
                         None, None, None, -1,
                         None, True)
-                self.assertIn('fds_to_keep', str(c.exception))
+                self.assertIn('map_fds', str(c.exception))
         finally:
             if not gc_enabled:
                 gc.disable()
