@@ -674,7 +674,7 @@ child_exec(char *const exec_array[],
            PyObject *preexec_fn,
            PyObject *preexec_fn_args_tuple)
 {
-    int i, saved_errno, reached_preexec = 0, fd_map_max;
+    int i, saved_errno, reached_preexec = 0, keep_fd_max = 0, errpipe_write_orig = errpipe_write;
     PyObject *result;
     const char* err_msg = "";
     /* Buffer large enough to hold a hex integer.  We can't malloc. */
@@ -691,28 +691,30 @@ child_exec(char *const exec_array[],
 
     if (fds_to_keep_len) {
         /* dup fds above the maximum target number */
-        fd_map_max = fds_to_keep[fds_to_keep_len - 1];
+        keep_fd_max = fds_to_keep[fds_to_keep_len - 1];
+        if (p2cread > keep_fd_max) {
+            keep_fd_max = p2cread;
+        }
+        if (c2pwrite > keep_fd_max) {
+            keep_fd_max = c2pwrite;
+        }
+        if (errwrite > keep_fd_max) {
+            keep_fd_max = errwrite;
+        }
         for (i = 0; i < fds_to_keep_len; ++i) {
             if (fds_to_keep[i] == errpipe_write) {
                 /* errpipe_write is part of fds_to_keep. It must be closed at
                    exec(), but kept open in the child process until exec() is
                    called.
                    move it above the target range where it won't be overwritten. */
-                dup2(errpipe_write, fd_map_max + 1);
+                dup2(errpipe_write, keep_fd_max + 1);
                 continue;
             }
-            POSIX_CALL(dup2(fds_map_from[i], fd_map_max + 2 + i));
+            POSIX_CALL(dup2(fds_map_from[i], keep_fd_max + 2 + i));
             if (_Py_set_inheritable_async_safe(fds_map_from[i], 0, NULL) < 0)
                 goto error;
         }
-        /* dup fds back to their final destinations */
-        for (i = 0; i < fds_to_keep_len; ++i) {
-            if (fds_to_keep[i] == errpipe_write) {
-                continue;
-            }
-            POSIX_CALL(dup2(fd_map_max + 2 + i, fds_to_keep[i]));
-        }
-        errpipe_write = fd_map_max + 1;
+        errpipe_write = keep_fd_max + 1;
     }
 
     /* When duping fds, if there arises a situation where one of the fds is
@@ -755,6 +757,16 @@ child_exec(char *const exec_array[],
     }
     else if (errwrite != -1)
         POSIX_CALL(dup2(errwrite, 2));  /* stderr */
+
+    if (fds_to_keep_len) {
+        /* dup fds back to their final destinations */
+        for (i = 0; i < fds_to_keep_len; ++i) {
+            if (fds_to_keep[i] == errpipe_write_orig) {
+                continue;
+            }
+            POSIX_CALL(dup2(keep_fd_max + 2 + i, fds_to_keep[i]));
+        }
+    }
 
     /* We no longer manually close p2cread, c2pwrite, and errwrite here as
      * _close_open_fds takes care when it is not already non-inheritable. */
