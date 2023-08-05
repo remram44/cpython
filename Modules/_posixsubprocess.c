@@ -758,6 +758,15 @@ child_exec(char *const exec_array[],
     if (fds_to_keep_len) {
         /* dup fds back to their final destinations */
         for (i = 0; i < fds_to_keep_len; ++i) {
+            if (fds_to_keep[i] == 0 && p2cread != -1) {
+                continue;
+            }
+            if (fds_to_keep[i] == 1 && c2pwrite != -1) {
+                continue;
+            }
+            if (fds_to_keep[i] == 2 && errwrite != -1) {
+                continue;
+            }
             if (fds_map_from[i] == errpipe_write_orig) {
                 /* errpipe_write is part of fds_to_keep. It must be closed at
                    exec(), but kept open in the child process until exec() is
