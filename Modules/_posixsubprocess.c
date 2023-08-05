@@ -699,7 +699,6 @@ child_exec(char *const exec_array[],
                    called.
                    move it above the target range where it won't be overwritten. */
                 dup2(errpipe_write, fd_map_max + 1);
-                errpipe_write = fd_map_max + 1;
                 continue;
             }
             POSIX_CALL(dup2(fds_map_from[i], fd_map_max + 2 + i));
@@ -713,6 +712,7 @@ child_exec(char *const exec_array[],
             }
             POSIX_CALL(dup2(fd_map_max + 2 + i, fds_to_keep[i]));
         }
+        errpipe_write = fd_map_max + 1;
     }
 
     /* When duping fds, if there arises a situation where one of the fds is
