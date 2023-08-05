@@ -701,20 +701,17 @@ child_exec(char *const exec_array[],
         if (errwrite > keep_fd_max) {
             keep_fd_max = errwrite;
         }
+        if (errpipe_write_orig > keep_fd_max) {
+            keep_fd_max = errpipe_write_orig;
+        }
         for (i = 0; i < fds_to_keep_len; ++i) {
-            if (fds_to_keep[i] == errpipe_write) {
-                /* errpipe_write is part of fds_to_keep. It must be closed at
-                   exec(), but kept open in the child process until exec() is
-                   called.
-                   move it above the target range where it won't be overwritten. */
-                dup2(errpipe_write, keep_fd_max + 1);
-                continue;
+            POSIX_CALL(dup2(fds_map_from[i], keep_fd_max + 1 + i));
+            if (fds_to_keep[i] == errpipe_write_orig) {
+                errpipe_write = keep_fd_max + 1 + i;
             }
-            POSIX_CALL(dup2(fds_map_from[i], keep_fd_max + 2 + i));
             if (_Py_set_inheritable_async_safe(fds_map_from[i], 0, NULL) < 0)
                 goto error;
         }
-        errpipe_write = keep_fd_max + 1;
     }
 
     /* When duping fds, if there arises a situation where one of the fds is
@@ -762,9 +759,15 @@ child_exec(char *const exec_array[],
         /* dup fds back to their final destinations */
         for (i = 0; i < fds_to_keep_len; ++i) {
             if (fds_to_keep[i] == errpipe_write_orig) {
+                /* errpipe_write is part of fds_to_keep. It must be closed at
+                   exec(), but kept open in the child process until exec() is
+                   called. */
+                fds_to_keep[i] = errpipe_write;
+                if (_Py_set_inheritable_async_safe(errpipe_write, 0, NULL) < 0)
+                    goto error;
                 continue;
             }
-            POSIX_CALL(dup2(keep_fd_max + 2 + i, fds_to_keep[i]));
+            POSIX_CALL(dup2(keep_fd_max + 1 + i, fds_to_keep[i]));
         }
     }
 
